@@ -1,125 +1,199 @@
 #!/bin/bash
 set -euo pipefail
+
+# ========== 环境适配（MCMS面板终端） ==========
+# 设置默认TERM，避免clear命令报错
+export TERM=${TERM:-xterm}
+
+# 清屏函数：混合方式，先空行顶出旧内容，再光标上移，菜单从顶部开始
+cls() {
+    local i
+    for ((i=0; i<30; i++)); do
+        echo
+    done
+    printf '\033[30A'
+}
+
+# 放宽错误处理，避免MCMS环境下意外退出
+set +e
+
 # ---------- 配置区 ----------
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
 SELF="$0"
 
-: <<'__SERVICES_CONFIG__'
-[
-  // ============================================
-  // 服务配置说明（// 开头的是注释，不影响运行）
-  // ============================================
-  // name         - 服务名（唯一标识，英文/数字/下划线，不要有空格）
-  // exec_file    - 可执行文件的完整文件名
-  // work_dir     - 工作目录（脚本同级的子文件夹名，不是完整路径）
-  // exec_type    - 运行类型：java / python / binary，留空则自动根据后缀识别
-  // exec_command - 自定义完整启动命令，留空则自动生成标准命令
-  // auto_start   - 是否自启动：true / false
-  // ============================================
+# ============================================================
+# 服务配置（纯Bash块式，1:1复刻JSON风格）
+# ============================================================
+# 服务配置说明（# 开头的是注释，不影响运行）
+# ============================================================
+# name         - 服务名（唯一标识，英文/数字/下划线，不要有空格）
+# exec_file    - 可执行文件的完整文件名
+# work_dir     - 工作目录（脚本同级的子文件夹名，不是完整路径）
+# exec_type    - 运行类型：java / python / binary，留空则自动根据后缀识别
+# exec_command - 自定义完整启动命令，留空则自动生成标准命令
+# auto_start   - 是否自启动：true / false
+# ============================================================
+# 添加新服务：复制下面任意一个服务块，修改内容即可
+# 脚本会自动发现所有 SERVICE_ 开头的配置，无需手动添加到列表
+# ============================================================
 
-  {
-    "name": "zenith-bin",               // 服务名
-    "exec_file": "ZenithProxy",          // 可执行文件名
-    "work_dir": "ZenithProxy",           // 工作目录（子文件夹名）
-    "exec_type": "",              // 运行类型（留空自动识别）
-    "exec_command": "",           // 自定义启动命令（留空自动生成）
-    "auto_start": false           // 是否自启动
-  },
+# 服务1
+SERVICE_1=(
+  'name: "zenith-bin"'               # 服务名
+  'exec_file: "ZenithProxy"'          # 可执行文件名
+  'work_dir: "ZenithProxy"'           # 工作目录（子文件夹名）
+  'exec_type: ""'              # 运行类型（留空自动识别）
+  'exec_command: ""'           # 自定义启动命令（留空自动生成）
+  'auto_start: "false"'           # 是否自启动
+)
 
-  {
-    "name": "zenith-jar",               // 服务名
-    "exec_file": "ZenithProxy.jar",          // 可执行文件名
-    "work_dir": "ZenithProxy.jar",           // 工作目录（子文件夹名）
-    "exec_type": "",              // 运行类型（留空自动识别）
-    "exec_command": "",           // 自定义启动命令（留空自动生成）
-    "auto_start": false           // 是否自启动
-  },
+# 服务2
+SERVICE_2=(
+  'name: "zenith-jar"'               # 服务名
+  'exec_file: "ZenithProxy.jar"'          # 可执行文件名
+  'work_dir: "ZenithProxy.jar"'           # 工作目录（子文件夹名）
+  'exec_type: ""'              # 运行类型（留空自动识别）
+  'exec_command: ""'           # 自定义启动命令（留空自动生成）
+  'auto_start: "false"'           # 是否自启动
+)
 
-  {
-    "name": "zenith-26.1",               // 服务名
-    "exec_file": "ZenithProxy26.1.jar",          // 可执行文件名
-    "work_dir": "ZenithProxy26.1.jar",           // 工作目录（子文件夹名）
-    "exec_type": "",              // 运行类型（留空自动识别）
-    "exec_command": "",           // 自定义启动命令（留空自动生成）
-    "auto_start": false           // 是否自启动
-  }
-]
-__SERVICES_CONFIG__
+# ============================================================
+# 服务自动发现与初始化
+# ============================================================
 
-# ---------- JSON 配置解析 ----------
-# 提取脚本头部的JSON配置
-extract_config_json() {
-    # 从 here document 配置块中提取 JSON，并去掉 // 注释
-    sed -n '/^: <<.__SERVICES_CONFIG__./,/^__SERVICES_CONFIG__$/p' "$SELF" \
-        | sed '1d;$d' \
-        | sed 's|//.*$||' \
-        | sed '/^[[:space:]]*$/d'
+# 全局变量：服务数量和服务索引列表
+SERVICE_COUNT=0
+SERVICE_INDEXES=()
+
+# 自动发现所有服务配置
+discover_services() {
+    SERVICE_COUNT=0
+    SERVICE_INDEXES=()
+    
+    local i=1
+    while true; do
+        local var_name="SERVICE_${i}"
+        # 检查这个变量是否存在（是一个数组）
+        if declare -p "$var_name" 2>/dev/null | grep -q 'declare -a'; then
+            SERVICE_INDEXES+=("$i")
+            SERVICE_COUNT=$((SERVICE_COUNT + 1))
+            i=$((i + 1))
+        else
+            break
+        fi
+    done
 }
 
-# 获取所有服务名（空格分隔）
+# 从服务配置块中提取字段值
+get_service_field_by_idx() {
+    local idx="$1"
+    local field="$2"
+    
+    local var_name="SERVICE_${idx}"
+    local -n service_arr="$var_name"
+    
+    local line=""
+    for line in "${service_arr[@]}"; do
+        # 提取字段名和值（格式：'field: "value"'）
+        local key="${line%%:*}"
+        local value="${line#*: }"
+        # 去掉可能的注释
+        value="${value%%#*}"
+        # 去掉首尾空格
+        value="$(echo -e "${value}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+        # 去掉首尾的双引号
+        value="${value#\"}"
+        value="${value%\"}"
+        
+        if [ "$key" = "$field" ]; then
+            echo "$value"
+            return 0
+        fi
+    done
+    
+    echo ""
+    return 1
+}
+
+
+# 初始化：发现服务
+discover_services
+
+# ---------- 配置读取函数 ----------
+
+# 获取所有服务名（按顺序输出）
 get_service_names() {
-    extract_config_json | python3 -c "
-import sys, json, signal
-signal.signal(signal.SIGPIPE, signal.SIG_DFL)
-data = json.load(sys.stdin)
-for item in data:
-    print(item['name'])
-"
+    local i=0
+    for ((i=0; i<SERVICE_COUNT; i++)); do
+        local idx="${SERVICE_INDEXES[$i]}"
+        get_service_field_by_idx "$idx" "name"
+    done
 }
 
-# 获取指定服务的指定字段值
+# 根据服务名获取索引（返回在SERVICE_INDEXES中的位置，0-based）
+get_service_pos() {
+    local name="$1"
+    local i=0
+    for ((i=0; i<SERVICE_COUNT; i++)); do
+        local idx="${SERVICE_INDEXES[$i]}"
+        local sname=$(get_service_field_by_idx "$idx" "name")
+        if [ "$sname" = "$name" ]; then
+            echo "$i"
+            return 0
+        fi
+    done
+    echo "-1"
+    return 1
+}
+
+# 获取服务指定字段
 get_service_field() {
     local name="$1"
     local field="$2"
-    extract_config_json | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-for item in data:
-    if item['name'] == '$name':
-        print(item.get('$field', ''))
-        break
-"
+    local pos=$(get_service_pos "$name")
+    
+    if [ "$pos" = "-1" ]; then
+        echo ""
+        return 1
+    fi
+    
+    local idx="${SERVICE_INDEXES[$pos]}"
+    get_service_field_by_idx "$idx" "$field"
 }
 
 # 检查服务是否存在
 service_exists() {
     local name="$1"
-    local svc=""
-    while IFS= read -r svc; do
-        [ "$svc" = "$name" ] && return 0
-    done < <(get_service_names)
-    return 1
+    local pos=$(get_service_pos "$name")
+    [ "$pos" != "-1" ]
 }
 
-# 检查是否自启动
+# 检查是否在自启动列表中
 in_auto_list() {
     local name="$1"
-    local val=""
-    val=$(get_service_field "$name" "auto_start")
+    local val=$(get_service_field "$name" "auto_start")
     [ "$val" = "True" ] || [ "$val" = "true" ]
 }
 
 # 获取服务工作目录（完整路径）
 service_dir() {
     local name="$1"
-    local dir=""
-    dir=$(get_service_field "$name" "work_dir")
+    local dir=$(get_service_field "$name" "work_dir")
     printf '%s/%s\n' "$SCRIPT_DIR" "$dir"
 }
 
-# 获取执行文件名
+# 获取可执行文件名
 service_exec_file() {
     local name="$1"
     get_service_field "$name" "exec_file"
 }
 
-# 获取执行类型（自动识别或手动指定）
+# 获取执行类型（java/python/binary）
 service_exec_type() {
     local name="$1"
     local type=""
     type=$(get_service_field "$name" "exec_type")
     if [ -z "$type" ]; then
-        # 自动根据文件后缀识别
         local file=""
         file=$(service_exec_file "$name")
         case "$file" in
@@ -138,19 +212,17 @@ service_exec_command() {
     get_service_field "$name" "exec_command"
 }
 
-# 生成标准启动命令
+# 生成启动命令
 build_start_command() {
     local name="$1"
     local custom_cmd=""
     custom_cmd=$(service_exec_command "$name")
     
     if [ -n "$custom_cmd" ]; then
-        # 有自定义命令，直接使用
         echo "$custom_cmd"
         return 0
     fi
     
-    # 自动生成标准命令
     local exec_type=""
     local exec_file=""
     exec_type=$(service_exec_type "$name")
@@ -172,33 +244,27 @@ build_start_command() {
     esac
 }
 
-# 旧版配置已废弃，使用脚本头部的 JSON 配置
-# declare -A app=(
-# ["nike"]="nike"
-# ["WDDWWB"]="WDDWWB"
-# ["hebaiju"]="hebaiju"
-# ["liveou"]="liveou"
-# ["superman"]="superman"
-# )
-# 旧版自启动列表已废弃，使用 JSON 配置中的 auto_start 字段
-# AUTO_START=(
-# WDDWWB
-# )
-# ---------- 保存自启动配置到脚本自身 ----------
-# 已废弃，自启动配置现在从JSON读取
-save_auto_start() {
-    return 0
+# ---------- 全局stop处理函数 ----------
+# 任何界面收到stop指令都调用此函数
+handle_global_stop() {
+    echo
+    echo "收到停止命令，正在停止所有服务..."
+    stop_all
+    echo "所有服务已停止，退出"
+    exit 0
 }
-# 旧版已废弃，使用新版JSON读取
-# in_auto_list() {
-#     local name="$1"
-#     for item in "${AUTO_START[@]}"; do
-#         [ "$item" = "$name" ] && return 0
-#     done
-#     return 1
-# }
-# ---------- 通用进程检测（通过环境变量标记，兼容所有程序类型） ----------
-# 检查进程是否为指定服务（通过环境变量 ALLSH_SERVICE_NAME 识别）
+
+# 检查输入是否为stop指令，如果是则处理
+check_stop() {
+    local input="$1"
+    if [ "$input" = "stop" ]; then
+        handle_global_stop
+        return 0
+    fi
+    return 1
+}
+
+# ---------- 通用进程检测 ----------
 cmdline_matches_service() {
     local pid="$1"
     local name="$2"
@@ -214,6 +280,8 @@ cmdline_matches_service() {
     
     return 1
 }
+
+# 获取服务的所有PID
 get_pid() {
     local name="$1"
     local proc=""
@@ -227,6 +295,8 @@ get_pid() {
     done
     return 0
 }
+
+# 检查服务是否正在运行
 is_running() {
     local name="$1"
     local pid=""
@@ -235,31 +305,34 @@ is_running() {
     done < <(get_pid "$name")
     return 1
 }
-# 旧版已废弃，使用新版JSON读取
-# service_dir() {
-#     local name="$1"
-#     printf '%s/%s\n' "$SCRIPT_DIR" "${app[$name]}"
-# }
+
+# ---------- 控制台桥接相关路径 ----------
+
 service_log_path() {
     local name="$1"
     printf '%s/%s.log\n' "$(service_dir "$name")" "$name"
 }
+
 service_fifo_path() {
     local name="$1"
     printf '%s/.%s.stdin\n' "$(service_dir "$name")" "$name"
 }
+
 service_keeper_pid_path() {
     local name="$1"
     printf '%s/.%s.stdin.keep.pid\n' "$(service_dir "$name")" "$name"
 }
+
 pid_is_alive() {
     local pid="${1:-}"
     [ -n "$pid" ] && [ -d "/proc/$pid" ]
 }
+
 is_console_managed() {
     local name="$1"
     [ -p "$(service_fifo_path "$name")" ]
 }
+
 ensure_console_runtime() {
     local name="$1"
     local fifo=""
@@ -267,10 +340,12 @@ ensure_console_runtime() {
     local pid=""
     fifo=$(service_fifo_path "$name")
     pid_file=$(service_keeper_pid_path "$name")
+    
     if [ ! -p "$fifo" ]; then
         rm -f "$fifo"
         mkfifo "$fifo"
     fi
+    
     if [ -f "$pid_file" ]; then
         read -r pid < "$pid_file" || true
         if pid_is_alive "$pid"; then
@@ -278,10 +353,12 @@ ensure_console_runtime() {
         fi
         rm -f "$pid_file"
     fi
+    
     nohup sh -c 'exec 3<>"$1"; while true; do sleep 3600; done' sh "$fifo" >/dev/null 2>&1 &
     echo "$!" > "$pid_file"
     return 0
 }
+
 cleanup_console_runtime() {
     local name="$1"
     local fifo=""
@@ -289,6 +366,7 @@ cleanup_console_runtime() {
     local pid=""
     fifo=$(service_fifo_path "$name")
     pid_file=$(service_keeper_pid_path "$name")
+    
     if [ -f "$pid_file" ]; then
         read -r pid < "$pid_file" || true
         if pid_is_alive "$pid"; then
@@ -300,25 +378,29 @@ cleanup_console_runtime() {
         fi
         rm -f "$pid_file"
     fi
+    
     rm -f "$fifo"
     return 0
 }
+
 # ---------- 启动单个服务 ----------
 start_service() {
     local name="$1"
+    
     if ! service_exists "$name"; then
         echo "❌ 无效服务：$name"
         return 1
     fi
+    
     if is_running "$name"; then
         if is_console_managed "$name"; then
             echo "ℹ️ $name 已经在运行"
         else
             echo "ℹ️ $name 已在运行（非控制台桥接模式）"
-            echo "   如需重新进入控制台，请先停止后再用 all.sh 启动"
         fi
         return 0
     fi
+    
     local service_path=""
     local fifo=""
     local log_file=""
@@ -327,13 +409,16 @@ start_service() {
     fifo=$(service_fifo_path "$name")
     log_file=$(service_log_path "$name")
     start_cmd=$(build_start_command "$name")
+    
     echo "→ 启动 $name"
     echo "  命令: $start_cmd"
+    
     touch "$log_file"
     ensure_console_runtime "$name"
-    nohup sh -c 'cd "$1" && ALLSH_SERVICE_NAME="$2" exec $3 <"$4" >>"$5" 2>&1' sh "$service_path" "$name" "$start_cmd" "$fifo" "$log_file" >/dev/null 2>&1 &
     
-    # 等待进程启动（最多等待5秒，每秒检测一次）
+    nohup sh -c 'cd "$1" && ALLSH_SERVICE_NAME="$2" exec $3 <"$4" >>"$5" 2>&1' \
+        sh "$service_path" "$name" "$start_cmd" "$fifo" "$log_file" >/dev/null 2>&1 &
+    
     local max_wait=5
     local waited=0
     while [ $waited -lt $max_wait ]; do
@@ -345,58 +430,64 @@ start_service() {
         waited=$((waited + 1))
     done
     
-    # 启动失败，清理控制台运行时
     cleanup_console_runtime "$name"
     echo "❌ $name 启动失败，请查看日志"
     return 1
 }
+
 # ---------- 停止单个服务 ----------
 stop_service() {
     local name="$1"
+    
     if ! service_exists "$name"; then
         echo "❌ 无效服务：$name"
         return 1
     fi
+    
     local pids=()
     local pid=""
     while IFS= read -r pid; do
         [ -n "$pid" ] && pids+=("$pid")
     done < <(get_pid "$name")
+    
     if [ "${#pids[@]}" -eq 0 ]; then
         echo "ℹ️ $name 未运行"
         cleanup_console_runtime "$name"
         return 0
     fi
+    
     echo "→ 停止 $name (PID:${pids[*]})"
+    
     kill "${pids[@]}"
     sleep 1
+    
     if is_running "$name"; then
         kill -9 "${pids[@]}"
         echo "⚠️ 强制停止 $name"
     fi
+    
     cleanup_console_runtime "$name"
     echo "✅ $name 已停止"
     return 0
 }
-# ---------- 交互式启动 ----------
+
+# ---------- 交互式启动菜单 ----------
 interactive_start() {
     while true; do
-        /usr/bin/clear
+        cls
         echo
         echo "╔══════════════════════════════════════╗"
         echo "║            启动服务                 ║"
         echo "╠══════════════════════════════════════╣"
-        echo "║  0) 返回                             ║"
+        echo "║  0) 返回主菜单                       ║"
         echo "║  9) 全部启动                         ║"
         echo "║ ─────────────────────────────────── ║"
         
-        # 构建服务列表（包含状态，固定宽度对齐）
         local services=()
         local svc=""
         local max_len=0
         local idx=1
         
-        # 先计算最长服务名长度
         while IFS= read -r svc; do
             [ -z "$svc" ] && continue
             local len=${#svc}
@@ -405,14 +496,11 @@ interactive_start() {
             fi
         done < <(get_service_names)
         
-        # 再加2个空格的余量
         max_len=$((max_len + 2))
         
-        # 显示服务列表
         while IFS= read -r svc; do
             [ -z "$svc" ] && continue
             services+=("$svc")
-            # 用 printf 填充空格，让状态对齐
             local padded_name=""
             padded_name=$(printf "%-${max_len}s" "$svc")
             local status=""
@@ -421,7 +509,6 @@ interactive_start() {
             else
                 status="(🔴 已停止)"
             fi
-            # 格式化编号和内容
             local num_str=$(printf "%2d" "$idx")
             echo "║  ${num_str}) ${padded_name}${status} ║"
             idx=$((idx + 1))
@@ -431,21 +518,23 @@ interactive_start() {
         echo
         read -p "请选择 (0返回, 9全部): " choice
         
+        # 全局stop检测
+        check_stop "$choice" && return 0
+        
         case "$choice" in
-            0|00|q|Q)
+            0)
                 return 0
                 ;;
-            9|a|A|all)
+            9)
                 start_all
                 sleep 1
                 ;;
             *)
-                # 检查是否是数字
                 if [[ "$choice" =~ ^[0-9]+$ ]]; then
-                    local svc_idx=$((choice - 1))
-                    if [ $svc_idx -ge 0 ] && [ $svc_idx -lt ${#services[@]} ]; then
-                        start_service "${services[$svc_idx]}"
-                sleep 1
+                    local svc_idx=$((choice))
+                    if [ $svc_idx -ge 1 ] && [ $svc_idx -le ${#services[@]} ]; then
+                        start_service "${services[$((svc_idx - 1))]}"
+                        sleep 1
                     else
                         echo "❌ 无效选择"
                         sleep 1
@@ -458,25 +547,24 @@ interactive_start() {
         esac
     done
 }
-# ---------- 交互式停止 ----------
+
+# ---------- 交互式停止菜单 ----------
 interactive_stop() {
     while true; do
-        /usr/bin/clear
+        cls
         echo
         echo "╔══════════════════════════════════════╗"
         echo "║            停止服务                 ║"
         echo "╠══════════════════════════════════════╣"
-        echo "║  0) 返回                             ║"
+        echo "║  0) 返回主菜单                       ║"
         echo "║  9) 全部停止                         ║"
         echo "║ ─────────────────────────────────── ║"
         
-        # 构建服务列表（包含状态，固定宽度对齐）
         local services=()
         local svc=""
         local max_len=0
         local idx=1
         
-        # 先计算最长服务名长度
         while IFS= read -r svc; do
             [ -z "$svc" ] && continue
             local len=${#svc}
@@ -485,14 +573,11 @@ interactive_stop() {
             fi
         done < <(get_service_names)
         
-        # 再加2个空格的余量
         max_len=$((max_len + 2))
         
-        # 显示服务列表
         while IFS= read -r svc; do
             [ -z "$svc" ] && continue
             services+=("$svc")
-            # 用 printf 填充空格，让状态对齐
             local padded_name=""
             padded_name=$(printf "%-${max_len}s" "$svc")
             local status=""
@@ -501,7 +586,6 @@ interactive_stop() {
             else
                 status="(🔴 已停止)"
             fi
-            # 格式化编号和内容
             local num_str=$(printf "%2d" "$idx")
             echo "║  ${num_str}) ${padded_name}${status} ║"
             idx=$((idx + 1))
@@ -511,21 +595,23 @@ interactive_stop() {
         echo
         read -p "请选择 (0返回, 9全部): " choice
         
+        # 全局stop检测
+        check_stop "$choice" && return 0
+        
         case "$choice" in
-            0|00|q|Q)
+            0)
                 return 0
                 ;;
-            9|a|A|all)
+            9)
                 stop_all
                 sleep 1
                 ;;
             *)
-                # 检查是否是数字
                 if [[ "$choice" =~ ^[0-9]+$ ]]; then
-                    local svc_idx=$((choice - 1))
-                    if [ $svc_idx -ge 0 ] && [ $svc_idx -lt ${#services[@]} ]; then
-                        stop_service "${services[$svc_idx]}"
-                sleep 1
+                    local svc_idx=$((choice))
+                    if [ $svc_idx -ge 1 ] && [ $svc_idx -le ${#services[@]} ]; then
+                        stop_service "${services[$((svc_idx - 1))]}"
+                        sleep 1
                     else
                         echo "❌ 无效选择"
                         sleep 1
@@ -538,6 +624,7 @@ interactive_stop() {
         esac
     done
 }
+
 # ---------- 启动所有自启动服务 ----------
 start_all() {
     echo "==== 启动所有自启动服务 ===="
@@ -558,7 +645,12 @@ start_all() {
             count=$((count + 1))
         fi
     done < <(get_service_names)
+    
+    if [ $count -eq 0 ]; then
+        echo "ℹ️ 没有设置自启动的服务"
+    fi
 }
+
 # ---------- 停止所有服务 ----------
 stop_all() {
     echo "==== 停止所有服务 ===="
@@ -568,11 +660,12 @@ stop_all() {
         stop_service "$name"
     done < <(get_service_names)
 }
-# ---------- 切换自启动 ----------
+
+# ---------- 切换自启动状态 ----------
 toggle_auto() {
     local name="$1"
     
-    # 如果提供了参数，直接切换单个服务
+    # 命令行模式：指定服务名
     if [ -n "$name" ]; then
         if ! service_exists "$name"; then
             echo "❌ 无效服务：$name"
@@ -580,133 +673,52 @@ toggle_auto() {
             return 1
         fi
         
-        local current_state=""
-        current_state=$(in_auto_list "$name" && echo "启用" || echo "禁用")
+        local pos=$(get_service_pos "$name")
+        local idx="${SERVICE_INDEXES[$pos]}"
+        local var_name="SERVICE_${idx}"
+        local -n service_arr="$var_name"
         
-        # 用Python修改JSON配置并写回脚本
-        local new_state=""
+        local new_val=""
         if in_auto_list "$name"; then
-            new_state="false"
+            new_val="false"
+            echo "✅ $name 自启动已禁用"
         else
-            new_state="true"
+            new_val="true"
+            echo "✅ $name 自启动已启用"
         fi
         
-        # 把脚本路径和参数传给 Python 脚本
-        python3 - "$SELF" "$name" "$new_state" << 'PYTHON_SCRIPT'
-import sys
-import json
-import re
-
-script_path = sys.argv[1]
-service_name = sys.argv[2]
-new_auto_start_str = sys.argv[3]
-new_auto_start = new_auto_start_str.lower() == 'true'
-
-with open(script_path, 'r') as f:
-    lines = f.readlines()
-
-# 找到配置块的开始和结束
-start_marker = ": <<'__SERVICES_CONFIG__'"
-end_marker = "__SERVICES_CONFIG__"
-
-start_idx = None
-end_idx = None
-for i, line in enumerate(lines):
-    if line.strip() == start_marker:
-        start_idx = i
-    elif line.strip() == end_marker:
-        end_idx = i
-        break
-
-if start_idx is None or end_idx is None:
-    print('❌ 找不到配置块')
-    sys.exit(1)
-
-# 提取JSON内容（去掉//注释）
-json_lines = []
-for line in lines[start_idx+1:end_idx]:
-    # 去掉 // 注释
-    line = re.sub(r'//.*$', '', line)
-    # 跳过空行
-    if line.strip() == '':
-        continue
-    json_lines.append(line)
-
-json_str = ''.join(json_lines)
-data = json.loads(json_str)
-
-# 修改指定服务的auto_start
-found = False
-for item in data:
-    if item['name'] == service_name:
-        item['auto_start'] = new_auto_start
-        found = True
-        break
-
-if not found:
-    print(f'❌ 找不到服务：{service_name}')
-    sys.exit(1)
-
-# 重新生成JSON配置（带详细注释说明）
-new_config_lines = []
-new_config_lines.append('[\n')
-new_config_lines.append('  // ============================================\n')
-new_config_lines.append('  // 服务配置说明（// 开头的是注释，不影响运行）\n')
-new_config_lines.append('  // ============================================\n')
-new_config_lines.append('  // name         - 服务名（唯一标识，英文/数字/下划线，不要有空格）\n')
-new_config_lines.append('  // exec_file    - 可执行文件的完整文件名\n')
-new_config_lines.append('  // work_dir     - 工作目录（脚本同级的子文件夹名，不是完整路径）\n')
-new_config_lines.append('  // exec_type    - 运行类型：java / python / binary，留空则自动根据后缀识别\n')
-new_config_lines.append('  // exec_command - 自定义完整启动命令，留空则自动生成标准命令\n')
-new_config_lines.append('  // auto_start   - 是否自启动：true / false\n')
-new_config_lines.append('  // ============================================\n')
-new_config_lines.append('\n')
-
-for idx, item in enumerate(data):
-    new_config_lines.append('  {\n')
-    new_config_lines.append('    "name": "' + item['name'] + '",               // 服务名\n')
-    new_config_lines.append('    "exec_file": "' + item['exec_file'] + '",          // 可执行文件名\n')
-    new_config_lines.append('    "work_dir": "' + item['work_dir'] + '",           // 工作目录（子文件夹名）\n')
-    new_config_lines.append('    "exec_type": "' + item['exec_type'] + '",              // 运行类型（留空自动识别）\n')
-    new_config_lines.append('    "exec_command": "' + item['exec_command'] + '",           // 自定义启动命令（留空自动生成）\n')
-    new_config_lines.append('    "auto_start": ' + str(item['auto_start']).lower() + '           // 是否自启动\n')
-    if idx < len(data) - 1:
-        new_config_lines.append('  },\n')
-        new_config_lines.append('\n')
-    else:
-        new_config_lines.append('  }\n')
-
-new_config_lines.append(']\n')
-
-# 替换原配置块
-new_lines = lines[:start_idx+1] + new_config_lines + lines[end_idx:]
-
-with open(script_path, 'w') as f:
-    f.writelines(new_lines)
-
-print(f'✅ {service_name} 自启动已切换')
-PYTHON_SCRIPT
+        # 1. 修改脚本文件本体（持久化）
+        sed -i "/^SERVICE_${idx}=(/,/^)/s/  'auto_start: \"[a-z]*\"'/  'auto_start: \"$new_val\"'/" "$SELF"
+        
+        # 2. 同时修改内存中的数组（当前会话立即生效）
+        local j=0
+        for ((j=0; j<${#service_arr[@]}; j++)); do
+            local line="${service_arr[$j]}"
+            local key="${line%%:*}"
+            if [ "$key" = "auto_start" ]; then
+                service_arr[$j]="auto_start: \"$new_val\""
+                break
+            fi
+        done
         
         return 0
     fi
     
-    # 无参数时，进入交互式选择模式
+    # 交互模式：显示菜单
     while true; do
-        /usr/bin/clear
+        cls
         echo
         echo "╔══════════════════════════════════════╗"
         echo "║          自启动管理                 ║"
         echo "╠══════════════════════════════════════╣"
-        echo "║  0) 返回                             ║"
+        echo "║  0) 返回主菜单                       ║"
         echo "║ ─────────────────────────────────── ║"
         
-        # 显示所有服务列表（包含状态，固定宽度对齐）
         local services=()
         local svc=""
         local max_len=0
         local idx=1
         
-        # 先计算最长服务名长度
         while IFS= read -r svc; do
             [ -z "$svc" ] && continue
             local len=${#svc}
@@ -717,7 +729,6 @@ PYTHON_SCRIPT
         
         max_len=$((max_len + 2))
         
-        # 显示服务列表
         while IFS= read -r svc; do
             [ -z "$svc" ] && continue
             services+=("$svc")
@@ -729,7 +740,6 @@ PYTHON_SCRIPT
             else
                 status="(❌ 禁用)"
             fi
-            # 格式化编号和内容
             local num_str=$(printf "%2d" "$idx")
             echo "║  ${num_str}) ${padded_name}${status} ║"
             idx=$((idx + 1))
@@ -739,17 +749,19 @@ PYTHON_SCRIPT
         echo
         read -p "请选择 (0返回): " choice
         
+        # 全局stop检测
+        check_stop "$choice" && return 0
+        
         case "$choice" in
-            0|00|q|Q)
+            0)
                 return 0
                 ;;
             *)
-                # 检查是否是数字
                 if [[ "$choice" =~ ^[0-9]+$ ]]; then
-                    local svc_idx=$((choice - 1))
-                    if [ $svc_idx -ge 0 ] && [ $svc_idx -lt ${#services[@]} ]; then
-                        toggle_auto "${services[$svc_idx]}"
-                sleep 1
+                    local svc_idx=$((choice))
+                    if [ $svc_idx -ge 1 ] && [ $svc_idx -le ${#services[@]} ]; then
+                        toggle_auto "${services[$((svc_idx - 1))]}"
+                        sleep 1
                     else
                         echo "❌ 无效选择"
                         sleep 1
@@ -762,19 +774,19 @@ PYTHON_SCRIPT
         esac
     done
 }
-
+# ---------- 查看日志 ----------
 log_service() {
     local name="$1"
     
-    # 无参数时进入交互式选择
+    # 交互模式：显示服务列表
     if [ -z "$name" ]; then
         while true; do
-            /usr/bin/clear
+            cls
             echo
             echo "╔══════════════════════════════════════╗"
             echo "║            查看日志                 ║"
             echo "╠══════════════════════════════════════╣"
-            echo "║  0) 返回                             ║"
+            echo "║  0) 返回主菜单                       ║"
             echo "║ ─────────────────────────────────── ║"
             
             local services=()
@@ -782,7 +794,6 @@ log_service() {
             local max_len=0
             local idx=1
             
-            # 先计算最长服务名长度
             while IFS= read -r svc; do
                 [ -z "$svc" ] && continue
                 local len=${#svc}
@@ -793,14 +804,19 @@ log_service() {
             
             max_len=$((max_len + 2))
             
-            # 显示服务列表
             while IFS= read -r svc; do
                 [ -z "$svc" ] && continue
                 services+=("$svc")
                 local padded_name=""
                 padded_name=$(printf "%-${max_len}s" "$svc")
+                local status=""
+                if is_running "$svc"; then
+                    status="(🟢 运行中)"
+                else
+                    status="(🔴 已停止)"
+                fi
                 local num_str=$(printf "%2d" "$idx")
-                echo "║  ${num_str}) ${padded_name} ║"
+                echo "║  ${num_str}) ${padded_name}${status} ║"
                 idx=$((idx + 1))
             done < <(get_service_names)
             
@@ -808,47 +824,62 @@ log_service() {
             echo
             read -p "请选择 (0返回): " choice
             
+            # 全局stop检测
+            check_stop "$choice" && return 0
+            
             case "$choice" in
-                0|00|q|Q)
+                0)
                     return 0
                     ;;
                 *)
-                    # 检查是否是数字
                     if [[ "$choice" =~ ^[0-9]+$ ]]; then
-                        local svc_idx=$((choice - 1))
-                        if [ $svc_idx -ge 0 ] && [ $svc_idx -lt ${#services[@]} ]; then
-                            local selected_name="${services[$svc_idx]}"
-                            # 查看日志
+                        local svc_idx=$((choice))
+                        if [ $svc_idx -ge 1 ] && [ $svc_idx -le ${#services[@]} ]; then
+                            local selected_name="${services[$((svc_idx - 1))]}"
                             if service_exists "$selected_name"; then
                                 local log_file=""
                                 log_file=$(service_log_path "$selected_name")
                                 touch "$log_file"
-                                /usr/bin/clear
+                                cls
                                 echo
                                 echo "╔══════════════════════════════════════╗"
                                 echo "║        $selected_name 日志         ║"
                                 echo "╚══════════════════════════════════════╝"
-                                echo "[输入 0 或 exit 返回日志列表]"
+                                echo "[输入 0 返回列表，输入 00 直接回主菜单]"
                                 echo
                                 tail -n 30 -f "$log_file" &
                                 local tail_pid=$!
-                                trap 'echo; echo "请输入 0 或 exit 返回"' INT
+                                trap 'echo; echo "请输入 0 返回列表"' INT
                                 while true; do
                                     printf "log> "
                                     IFS= read -r cmd
+                                    
+                                    # 全局stop检测
+                                    if [ "$cmd" = "stop" ]; then
+                                        kill "$tail_pid" 2>/dev/null || true
+                                        wait "$tail_pid" 2>/dev/null || true
+                                        trap - INT
+                                        handle_global_stop
+                                        return 0
+                                    fi
+                                    
                                     case "$cmd" in
-                                        0|00|exit|quit)
+                                        0)
                                             break
                                             ;;
+                                        00)
+                                            kill "$tail_pid" 2>/dev/null || true
+                                            wait "$tail_pid" 2>/dev/null || true
+                                            trap - INT
+                                            return 0
+                                            ;;
                                         *)
-                                            # 忽略其他输入
                                             ;;
                                     esac
                                 done
                                 trap - INT
                                 kill "$tail_pid" 2>/dev/null || true
                                 wait "$tail_pid" 2>/dev/null || true
-                                # 看完后回到选择菜单
                                 sleep 1
                             fi
                         else
@@ -863,7 +894,7 @@ log_service() {
             esac
         done
     else
-        # 命令行参数模式，直接查看
+        # 命令行模式：直接查看指定服务日志
         if ! service_exists "$name"; then
             echo "❌ 无效服务：$name"
             return 1
@@ -871,25 +902,34 @@ log_service() {
         local log_file=""
         log_file=$(service_log_path "$name")
         touch "$log_file"
-        /usr/bin/clear
+        cls
         echo
         echo "╔══════════════════════════════════════╗"
         echo "║        $name 日志                 ║"
         echo "╚══════════════════════════════════════╝"
-        echo "[输入 0 或 exit 退出]"
+        echo "[输入 0 退出]"
         echo
         tail -n 30 -f "$log_file" &
         local tail_pid=$!
-        trap 'echo; echo "请输入 0 或 exit 退出"' INT
+        trap 'echo; echo "请输入 0 退出"' INT
         while true; do
             printf "log> "
             IFS= read -r cmd
+            
+            # 全局stop检测
+            if [ "$cmd" = "stop" ]; then
+                kill "$tail_pid" 2>/dev/null || true
+                wait "$tail_pid" 2>/dev/null || true
+                trap - INT
+                handle_global_stop
+                return 0
+            fi
+            
             case "$cmd" in
-                0|00|exit|quit)
+                0)
                     break
                     ;;
                 *)
-                    # 忽略其他输入
                     ;;
             esac
         done
@@ -898,17 +938,20 @@ log_service() {
         wait "$tail_pid" 2>/dev/null || true
     fi
 }
-# ---------- 进入控制台 ----------
+
+# ---------- 进入服务控制台 ----------
 console_service() {
     local name="$1"
+    
+    # 交互模式：显示服务列表
     if [ -z "$name" ]; then
         while true; do
-            /usr/bin/clear
+            cls
             echo
             echo "╔══════════════════════════════════════╗"
             echo "║          进入服务控制台             ║"
             echo "╠══════════════════════════════════════╣"
-            echo "║  0) 返回                             ║"
+            echo "║  0) 返回主菜单                       ║"
             echo "║ ─────────────────────────────────── ║"
             
             local services=()
@@ -916,7 +959,6 @@ console_service() {
             local max_len=0
             local idx=1
             
-            # 先计算最长服务名长度
             while IFS= read -r svc; do
                 [ -z "$svc" ] && continue
                 local len=${#svc}
@@ -927,7 +969,6 @@ console_service() {
             
             max_len=$((max_len + 2))
             
-            # 显示服务列表
             while IFS= read -r svc; do
                 [ -z "$svc" ] && continue
                 services+=("$svc")
@@ -939,7 +980,6 @@ console_service() {
                 else
                     status="(🔴 已停止)"
                 fi
-                # 格式化编号和内容
                 local num_str=$(printf "%2d" "$idx")
                 echo "║  ${num_str}) ${padded_name}${status} ║"
                 idx=$((idx + 1))
@@ -949,16 +989,18 @@ console_service() {
             echo
             read -p "请选择 (0返回): " choice
             
+            # 全局stop检测
+            check_stop "$choice" && return 0
+            
             case "$choice" in
-                0|00|q|Q)
+                0)
                     return 0
                     ;;
                 *)
-                    # 检查是否是数字
                     if [[ "$choice" =~ ^[0-9]+$ ]]; then
-                        local svc_idx=$((choice - 1))
-                        if [ $svc_idx -ge 0 ] && [ $svc_idx -lt ${#services[@]} ]; then
-                            name="${services[$svc_idx]}"
+                        local svc_idx=$((choice))
+                        if [ $svc_idx -ge 1 ] && [ $svc_idx -le ${#services[@]} ]; then
+                            name="${services[$((svc_idx - 1))]}"
                             break
                         else
                             echo "❌ 无效选择"
@@ -972,54 +1014,81 @@ console_service() {
             esac
         done
     fi
+    
+    # 进入控制台
     if ! service_exists "$name"; then
         echo "❌ 无效服务：$name"
         return 1
     fi
+    
     if ! is_running "$name"; then
         echo "❌ $name 未运行"
         return 1
     fi
+    
     if ! is_console_managed "$name"; then
         echo "❌ $name 当前不是通过 all.sh 控制台模式启动"
         echo "   请先停止该服务，再通过 all.sh 重新启动"
         return 1
     fi
+    
     local fifo=""
     local log_file=""
     local tail_pid=""
     local cmd=""
     local read_status=0
+    
     fifo=$(service_fifo_path "$name")
     log_file=$(service_log_path "$name")
     touch "$log_file"
     ensure_console_runtime "$name"
-    /usr/bin/clear
+    
+    cls
     echo
     echo "╔══════════════════════════════════════╗"
     echo "║        $name 控制台桥接            ║"
     echo "╚══════════════════════════════════════╝"
-    echo "输入命令后回车发送，输入 /exit 返回主菜单"
+    echo "输入命令后回车发送，输入 0 返回，输入 00 直接回主菜单"
     echo
+    
     tail -n 30 -f "$log_file" &
     tail_pid=$!
-    trap 'echo; echo "请输入 /exit 返回主菜单"' INT
+    
+    trap 'echo; echo "请输入 0 返回"' INT
+    
     while true; do
         printf "\n[%s] console> " "$name"
         IFS= read -r cmd
         read_status=$?
+        
+        # 全局stop检测
+        if [ "$cmd" = "stop" ]; then
+            kill "$tail_pid" 2>/dev/null || true
+            wait "$tail_pid" 2>/dev/null || true
+            trap - INT
+            handle_global_stop
+            return 0
+        fi
+        
         if [ "$read_status" -ne 0 ]; then
             if [ "$read_status" -eq 130 ]; then
                 continue
             fi
             break
         fi
+        
         case "$cmd" in
             "" )
                 continue
                 ;;
-            /exit|exit|quit)
+            0)
                 break
+                ;;
+            00)
+                kill "$tail_pid" 2>/dev/null || true
+                wait "$tail_pid" 2>/dev/null || true
+                trap - INT
+                return 0
                 ;;
             *)
                 if ! is_running "$name"; then
@@ -1035,28 +1104,34 @@ console_service() {
                 ;;
         esac
     done
+    
     trap - INT
     kill "$tail_pid" 2>/dev/null || true
     wait "$tail_pid" 2>/dev/null || true
+    
     echo
     echo
     echo "↩ 已返回主菜单"
     sleep 1
 }
-# ---------- 显示状态 ----------
+
+# ---------- 显示服务状态总览 ----------
 show() {
     local name=""
     local run=""
     local status=""
     local auto=""
     local console=""
+    
     echo
     echo "╔══════════════════════════════════════╗"
     echo "║           服务状态总览               ║"
     echo "╚══════════════════════════════════════╝"
     echo
+    
     while IFS= read -r name; do
         [ -z "$name" ] && continue
+        
         if is_running "$name"; then
             run="🟢"
             status="运行中"
@@ -1070,88 +1145,87 @@ show() {
             status="已停止"
             console="-"
         fi
+        
         if in_auto_list "$name"; then
             auto="✅"
         else
             auto="❌"
         fi
+        
         printf "  $run %-10s %-8s (自启动：$auto 控制台：$console)\n" "$name" "$status"
     done < <(get_service_names)
+    
     echo
 }
+
 # ---------- 帮助信息 ----------
 show_help() {
     cat <<EOF
 使用方式：
-  $0                    # 进入交互模式
-  $0 <命令> [参数]       # 命令行模式
+  \$0                    # 进入交互模式
+  \$0 <命令> [参数]       # 命令行模式
+
 ==== 命令行模式 ====
-  $0 s                  # 查看所有服务状态
-  $0 start all          # 启动所有自启动服务
-  $0 start <服务名>     # 启动单个服务
-  $0 stop all           # 停止所有服务
-  $0 stop <服务名>      # 停止单个服务
-  $0 auto <服务名>      # 切换自启动状态
-  $0 log <服务名>       # 查看服务日志
-  $0 console <服务名>   # 进入服务控制台
+  \$0 s                  # 查看所有服务状态
+  \$0 start all          # 启动所有自启动服务
+  \$0 start <服务名>     # 启动单个服务
+  \$0 stop all           # 停止所有服务
+  \$0 stop <服务名>      # 停止单个服务
+  \$0 auto <服务名>      # 切换自启动状态
+  \$0 log <服务名>       # 查看服务日志
+  \$0 console <服务名>   # 进入服务控制台
+
 ==== 交互模式菜单 ====
   1. start          启动服务
   2. stop           停止服务
   3. auto           自启动管理
   4. log            查看日志
   5. console        进入服务控制台
-  6. q              退出
-  0 / exit       退出日志查看
-  /exit          退出控制台桥接
+  6. 0              退出
+
+  0               返回上一级
+  00              直接回主菜单（日志/控制台内）
 EOF
 }
-# ---------- 命令执行 ----------
+
+# ---------- 命令行模式执行 ----------
 execute() {
     local cmd="${1:-}"
     local arg="${2:-}"
+    
     case "$cmd" in
         s|"")
             show
             ;;
         start)
             if [ -z "$arg" ]; then
-                # 无参数时进入交互模式（仅在交互模式下）
                 interactive_start || true
             elif [ "$arg" = "all" ]; then
-                # 命令行模式：直接启动所有
                 start_all
             else
-                # 命令行模式：启动单个服务
                 start_service "$arg"
             fi
             ;;
         stop)
             if [ -z "$arg" ]; then
-                # 无参数时进入交互模式（仅在交互模式下）
                 interactive_stop || true
             elif [ "$arg" = "all" ]; then
-                # 命令行模式：直接停止所有
                 stop_all
             else
-                # 命令行模式：停止单个服务
                 stop_service "$arg"
             fi
             ;;
         auto)
             if [ -z "$arg" ]; then
-                # 无参数时进入交互模式
                 toggle_auto "" || true
             else
-                # 命令行模式：切换单个服务
                 toggle_auto "$arg"
             fi
             ;;
         log)
             if [ -z "$arg" ]; then
-                # 无参数时进入交互模式
                 log_service "" || true
             else
-                # 命令行模式：查看单个服务日志
                 log_service "$arg"
             fi
             ;;
@@ -1165,7 +1239,7 @@ execute() {
         help|"?")
             show_help
             ;;
-        q|quit|exit)
+        0|quit|exit)
             echo "再见！"
             exit 0
             ;;
@@ -1178,14 +1252,45 @@ execute() {
             ;;
     esac
 }
-# ---------- 交互模式 ----------
+
+# ---------- 交互模式主循环 ----------
 interactive() {
+    # ============================================================
+    # 启动时自动启动所有标记为自启动的服务
+    # ============================================================
+    echo "==== 服务管理控制台 ===="
+    echo
+    echo "正在检查自启动服务..."
+    
+    local auto_count=0
+    local name=""
+    while IFS= read -r name; do
+        [ -z "$name" ] && continue
+        if in_auto_list "$name"; then
+            auto_count=$((auto_count + 1))
+        fi
+    done < <(get_service_names)
+    
+    if [ $auto_count -gt 0 ]; then
+        echo "发现 $auto_count 个自启动服务，正在启动..."
+        echo
+        start_all
+        echo
+        echo "自启动服务启动完成"
+        sleep 2
+    else
+        echo "没有设置自启动的服务"
+        sleep 1
+    fi
+    
+    # ============================================================
+    # 主菜单循环
+    # ============================================================
     while true; do
-        /usr/bin/clear
+        cls
         echo "==== 服务管理控制台 ===="
         show
         
-        # 显示命令菜单
         echo
         echo "╔══════════════════════════════════════╗"
         echo "║            命令菜单                 ║"
@@ -1195,11 +1300,15 @@ interactive() {
         echo "║  3) auto           自启动管理         ║"
         echo "║  4) log            查看日志           ║"
         echo "║  5) console        进入服务控制台     ║"
-        echo "║  6) q              退出               ║"
+        echo "║  0) 退出                             ║"
         echo "╚══════════════════════════════════════╝"
         echo
         
-        read -p "请选择操作 (1-6): " choice
+        read -p "请选择操作 (1-5, 0退出): " choice
+        
+        # 全局stop检测
+        check_stop "$choice" && return 0
+        
         case "$choice" in
             1|start)
                 interactive_start || true
@@ -1216,7 +1325,10 @@ interactive() {
             5|console)
                 console_service "" || true
                 ;;
-            6|q|Q|quit|exit)
+            0)
+                echo
+                echo "正在停止所有服务..."
+                stop_all
                 echo "再见！"
                 return 0
                 ;;
@@ -1227,7 +1339,8 @@ interactive() {
         esac
     done
 }
-# ---------- 主逻辑 ----------
+
+# ---------- 主逻辑入口 ----------
 if [ $# -gt 0 ]; then
     execute "$@"
 else
