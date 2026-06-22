@@ -4,34 +4,56 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
 SELF="$0"
 
-# <<<SERVICES_CONFIG>>>
-# [
-#   {
-#     "name": "3c3uliveou",
-#     "exec_file": "ZenithProxy",
-#     "work_dir": "3c3u-liveou",
-#     "exec_type": "",
-#     "exec_command": "./ZenithProxy",
-#     "auto_start": false
-#   },
-#   {
-#     "name": "zenith-bin",
-#     "exec_file": "ZenithProxy",
-#     "work_dir": "zenithproxy-bin",
-#     "exec_type": "",
-#     "exec_command": "",
-#     "auto_start": false
-#   }
-# ]
-# <<<END_SERVICES_CONFIG>>>
+: <<'__SERVICES_CONFIG__'
+[
+  // ============================================
+  // 服务配置说明（// 开头的是注释，不影响运行）
+  // ============================================
+  // name         - 服务名（唯一标识，英文/数字/下划线，不要有空格）
+  // exec_file    - 可执行文件的完整文件名
+  // work_dir     - 工作目录（脚本同级的子文件夹名，不是完整路径）
+  // exec_type    - 运行类型：java / python / binary，留空则自动根据后缀识别
+  // exec_command - 自定义完整启动命令，留空则自动生成标准命令
+  // auto_start   - 是否自启动：true / false
+  // ============================================
+
+  {
+    "name": "zenith-bin",               // 服务名
+    "exec_file": "ZenithProxy",          // 可执行文件名
+    "work_dir": "ZenithProxy",           // 工作目录（子文件夹名）
+    "exec_type": "",              // 运行类型（留空自动识别）
+    "exec_command": "",           // 自定义启动命令（留空自动生成）
+    "auto_start": false           // 是否自启动
+  },
+
+  {
+    "name": "zenith-jar",               // 服务名
+    "exec_file": "ZenithProxy.jar",          // 可执行文件名
+    "work_dir": "ZenithProxy.jar",           // 工作目录（子文件夹名）
+    "exec_type": "",              // 运行类型（留空自动识别）
+    "exec_command": "",           // 自定义启动命令（留空自动生成）
+    "auto_start": false           // 是否自启动
+  },
+
+  {
+    "name": "zenith-26.1",               // 服务名
+    "exec_file": "ZenithProxy26.1.jar",          // 可执行文件名
+    "work_dir": "ZenithProxy26.1.jar",           // 工作目录（子文件夹名）
+    "exec_type": "",              // 运行类型（留空自动识别）
+    "exec_command": "",           // 自定义启动命令（留空自动生成）
+    "auto_start": false           // 是否自启动
+  }
+]
+__SERVICES_CONFIG__
 
 # ---------- JSON 配置解析 ----------
 # 提取脚本头部的JSON配置
 extract_config_json() {
-    sed -n '/^# <<<SERVICES_CONFIG>>>/,/^# <<<END_SERVICES_CONFIG>>>/p' "$SELF" \
+    # 从 here document 配置块中提取 JSON，并去掉 // 注释
+    sed -n '/^: <<.__SERVICES_CONFIG__./,/^__SERVICES_CONFIG__$/p' "$SELF" \
         | sed '1d;$d' \
-        | sed 's/^# //' \
-        | sed 's/^#//'
+        | sed 's|//.*$||' \
+        | sed '/^[[:space:]]*$/d'
 }
 
 # 获取所有服务名（空格分隔）
@@ -365,21 +387,39 @@ interactive_start() {
     echo "╚══════════════════════════════════════╝"
     echo
     
-    # 构建服务列表（包含状态）
+    # 构建服务列表（包含状态，固定宽度对齐）
     local services=()
     local display_options=("返回")
     local svc=""
+    local max_len=0
     
+    # 先计算最长服务名长度
     while IFS= read -r svc; do
         [ -z "$svc" ] && continue
-        services+=("$svc")
-        if is_running "$svc"; then
-            display_options+=("$svc (🟢 运行中)")
-        else
-            display_options+=("$svc (🔴 已停止)")
+        local len=${#svc}
+        if [ "$len" -gt "$max_len" ]; then
+            max_len=$len
         fi
     done < <(get_service_names)
     
+    # 再加2个空格的余量
+    max_len=$((max_len + 2))
+    
+    # 构建带对齐的显示列表
+    while IFS= read -r svc; do
+        [ -z "$svc" ] && continue
+        services+=("$svc")
+        # 用 printf 填充空格，让状态对齐
+        local padded_name=""
+        padded_name=$(printf "%-${max_len}s" "$svc")
+        if is_running "$svc"; then
+            display_options+=("${padded_name}(🟢 运行中)")
+        else
+            display_options+=("${padded_name}(🔴 已停止)")
+        fi
+    done < <(get_service_names)
+    
+    COLUMNS=1
     PS3="请选择: "
     select opt in "${display_options[@]}" "all - 启动所有"; do
         if [[ "$REPLY" == "q" ]] || [[ -z "$REPLY" ]]; then
@@ -399,7 +439,7 @@ interactive_start() {
                 ;;
             *)
                 # 提取服务名（去掉括号内的状态）
-                local name=$(echo "$opt" | sed 's/ (.*)$//')
+                local name=$(echo "$opt" | sed 's/ (.*)$//' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
                 if service_exists "$name"; then
                     start_service "$name"
                     break
@@ -419,21 +459,39 @@ interactive_stop() {
     echo "╚══════════════════════════════════════╝"
     echo
     
-    # 构建服务列表（包含状态）
+    # 构建服务列表（包含状态，固定宽度对齐）
     local services=()
     local display_options=("返回")
     local svc=""
+    local max_len=0
     
+    # 先计算最长服务名长度
     while IFS= read -r svc; do
         [ -z "$svc" ] && continue
-        services+=("$svc")
-        if is_running "$svc"; then
-            display_options+=("$svc (🟢 运行中)")
-        else
-            display_options+=("$svc (🔴 已停止)")
+        local len=${#svc}
+        if [ "$len" -gt "$max_len" ]; then
+            max_len=$len
         fi
     done < <(get_service_names)
     
+    # 再加2个空格的余量
+    max_len=$((max_len + 2))
+    
+    # 构建带对齐的显示列表
+    while IFS= read -r svc; do
+        [ -z "$svc" ] && continue
+        services+=("$svc")
+        # 用 printf 填充空格，让状态对齐
+        local padded_name=""
+        padded_name=$(printf "%-${max_len}s" "$svc")
+        if is_running "$svc"; then
+            display_options+=("${padded_name}(🟢 运行中)")
+        else
+            display_options+=("${padded_name}(🔴 已停止)")
+        fi
+    done < <(get_service_names)
+    
+    COLUMNS=1
     PS3="请选择: "
     select opt in "${display_options[@]}" "all - 停止所有"; do
         if [[ "$REPLY" == "q" ]] || [[ -z "$REPLY" ]]; then
@@ -453,7 +511,7 @@ interactive_stop() {
                 ;;
             *)
                 # 提取服务名（去掉括号内的状态）
-                local name=$(echo "$opt" | sed 's/ (.*)$//')
+                local name=$(echo "$opt" | sed 's/ (.*)$//' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
                 if service_exists "$name"; then
                     stop_service "$name"
                     break
@@ -517,25 +575,30 @@ toggle_auto() {
             new_state="true"
         fi
         
-        python3 -c "
+        # 把脚本路径和参数传给 Python 脚本
+        python3 - "$SELF" "$name" "$new_state" << 'PYTHON_SCRIPT'
 import sys
 import json
+import re
 
-script_path = '$SELF'
-service_name = '$name'
-new_auto_start_str = '$new_state'
+script_path = sys.argv[1]
+service_name = sys.argv[2]
+new_auto_start_str = sys.argv[3]
 new_auto_start = new_auto_start_str.lower() == 'true'
 
 with open(script_path, 'r') as f:
     lines = f.readlines()
 
 # 找到配置块的开始和结束
+start_marker = ": <<'__SERVICES_CONFIG__'"
+end_marker = "__SERVICES_CONFIG__"
+
 start_idx = None
 end_idx = None
 for i, line in enumerate(lines):
-    if line.strip() == '# <<<SERVICES_CONFIG>>>':
+    if line.strip() == start_marker:
         start_idx = i
-    elif line.strip() == '# <<<END_SERVICES_CONFIG>>>':
+    elif line.strip() == end_marker:
         end_idx = i
         break
 
@@ -543,16 +606,15 @@ if start_idx is None or end_idx is None:
     print('❌ 找不到配置块')
     sys.exit(1)
 
-# 提取JSON内容（去掉#前缀）
+# 提取JSON内容（去掉//注释）
 json_lines = []
 for line in lines[start_idx+1:end_idx]:
-    # 去掉行首的 # 或 # 
-    if line.startswith('# '):
-        json_lines.append(line[2:])
-    elif line.startswith('#'):
-        json_lines.append(line[1:])
-    else:
-        json_lines.append(line)
+    # 去掉 // 注释
+    line = re.sub(r'//.*$', '', line)
+    # 跳过空行
+    if line.strip() == '':
+        continue
+    json_lines.append(line)
 
 json_str = ''.join(json_lines)
 data = json.loads(json_str)
@@ -569,11 +631,36 @@ if not found:
     print(f'❌ 找不到服务：{service_name}')
     sys.exit(1)
 
-# 重新生成带#前缀的JSON配置
-new_json_str = json.dumps(data, indent=2, ensure_ascii=False)
+# 重新生成JSON配置（带详细注释说明）
 new_config_lines = []
-for line in new_json_str.split('\n'):
-    new_config_lines.append('# ' + line + '\n')
+new_config_lines.append('[\n')
+new_config_lines.append('  // ============================================\n')
+new_config_lines.append('  // 服务配置说明（// 开头的是注释，不影响运行）\n')
+new_config_lines.append('  // ============================================\n')
+new_config_lines.append('  // name         - 服务名（唯一标识，英文/数字/下划线，不要有空格）\n')
+new_config_lines.append('  // exec_file    - 可执行文件的完整文件名\n')
+new_config_lines.append('  // work_dir     - 工作目录（脚本同级的子文件夹名，不是完整路径）\n')
+new_config_lines.append('  // exec_type    - 运行类型：java / python / binary，留空则自动根据后缀识别\n')
+new_config_lines.append('  // exec_command - 自定义完整启动命令，留空则自动生成标准命令\n')
+new_config_lines.append('  // auto_start   - 是否自启动：true / false\n')
+new_config_lines.append('  // ============================================\n')
+new_config_lines.append('\n')
+
+for idx, item in enumerate(data):
+    new_config_lines.append('  {\n')
+    new_config_lines.append('    "name": "' + item['name'] + '",               // 服务名\n')
+    new_config_lines.append('    "exec_file": "' + item['exec_file'] + '",          // 可执行文件名\n')
+    new_config_lines.append('    "work_dir": "' + item['work_dir'] + '",           // 工作目录（子文件夹名）\n')
+    new_config_lines.append('    "exec_type": "' + item['exec_type'] + '",              // 运行类型（留空自动识别）\n')
+    new_config_lines.append('    "exec_command": "' + item['exec_command'] + '",           // 自定义启动命令（留空自动生成）\n')
+    new_config_lines.append('    "auto_start": ' + str(item['auto_start']).lower() + '           // 是否自启动\n')
+    if idx < len(data) - 1:
+        new_config_lines.append('  },\n')
+        new_config_lines.append('\n')
+    else:
+        new_config_lines.append('  }\n')
+
+new_config_lines.append(']\n')
 
 # 替换原配置块
 new_lines = lines[:start_idx+1] + new_config_lines + lines[end_idx:]
@@ -582,7 +669,7 @@ with open(script_path, 'w') as f:
     f.writelines(new_lines)
 
 print(f'✅ {service_name} 自启动已切换')
-"
+PYTHON_SCRIPT
         
         return 0
     fi
@@ -595,21 +682,37 @@ print(f'✅ {service_name} 自启动已切换')
     echo "╚══════════════════════════════════════╝"
     echo
     
-    # 显示所有服务列表（包含状态）
+    # 显示所有服务列表（包含状态，固定宽度对齐）
     local services=()
     local display_options=("返回")
     local svc=""
+    local max_len=0
     
+    # 先计算最长服务名长度
     while IFS= read -r svc; do
         [ -z "$svc" ] && continue
-        services+=("$svc")
-        if in_auto_list "$svc"; then
-            display_options+=("$svc (✅ 自启动)")
-        else
-            display_options+=("$svc (❌ 禁用)")
+        local len=${#svc}
+        if [ "$len" -gt "$max_len" ]; then
+            max_len=$len
         fi
     done < <(get_service_names)
     
+    max_len=$((max_len + 2))
+    
+    # 构建带对齐的显示列表
+    while IFS= read -r svc; do
+        [ -z "$svc" ] && continue
+        services+=("$svc")
+        local padded_name=""
+        padded_name=$(printf "%-${max_len}s" "$svc")
+        if in_auto_list "$svc"; then
+            display_options+=("${padded_name}(✅ 自启动)")
+        else
+            display_options+=("${padded_name}(❌ 禁用)")
+        fi
+    done < <(get_service_names)
+    
+    COLUMNS=1
     PS3="请选择: "
     select opt in "${display_options[@]}"; do
         if [[ "$REPLY" == "q" ]] || [[ -z "$REPLY" ]]; then
@@ -625,7 +728,7 @@ print(f'✅ {service_name} 自启动已切换')
                 ;;
             *)
                 # 提取服务名（去掉括号内的状态）
-                local selected_name=$(echo "$opt" | sed 's/ (.*)$//')
+                local selected_name=$(echo "$opt" | sed 's/ (.*)$//' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
                 if service_exists "$selected_name"; then
                     toggle_auto "$selected_name"
                     break
@@ -636,7 +739,7 @@ print(f'✅ {service_name} 自启动已切换')
         esac
     done
 }
-# ---------- 查看日志 ----------
+
 log_service() {
     local name="$1"
     
@@ -656,7 +759,8 @@ log_service() {
             services+=("$svc")
         done < <(get_service_names)
         
-        PS3="请选择 (1-$(( ${#services[@]} + 1 ))): "
+        COLUMNS=1
+    PS3="请选择 (1-$(( ${#services[@]} + 1 ))): "
         select opt in "返回" "${services[@]}"; do
             if [[ "$REPLY" == "q" ]] || [[ -z "$REPLY" ]]; then
                 return 0
@@ -713,15 +817,33 @@ console_service() {
         local services=()
         local display_options=("返回")
         local svc=""
+        local max_len=0
+        
+        # 先计算最长服务名长度
+        while IFS= read -r svc; do
+            [ -z "$svc" ] && continue
+            local len=${#svc}
+            if [ "$len" -gt "$max_len" ]; then
+                max_len=$len
+            fi
+        done < <(get_service_names)
+        
+        max_len=$((max_len + 2))
+        
+        # 构建带对齐的显示列表
         while IFS= read -r svc; do
             [ -z "$svc" ] && continue
             services+=("$svc")
+            local padded_name=""
+            padded_name=$(printf "%-${max_len}s" "$svc")
             if is_running "$svc"; then
-                display_options+=("$svc (🟢 运行中)")
+                display_options+=("${padded_name}(🟢 运行中)")
             else
-                display_options+=("$svc (🔴 已停止)")
+                display_options+=("${padded_name}(🔴 已停止)")
             fi
         done < <(get_service_names)
+        
+        COLUMNS=1
         PS3="请选择: "
         select opt in "${display_options[@]}"; do
             if [[ "$REPLY" == "q" ]] || [[ -z "$REPLY" ]]; then
@@ -736,7 +858,7 @@ console_service() {
                     ;;
                 *)
                     local selected_name=""
-                    selected_name=$(echo "$opt" | sed 's/ (.*)$//')
+                    selected_name=$(echo "$opt" | sed 's/ (.*)$//' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
                     if service_exists "$selected_name"; then
                         name="$selected_name"
                         break
@@ -974,45 +1096,33 @@ interactive() {
         echo "╚══════════════════════════════════════╝"
         echo
         
-        PS3="请选择操作 (1-6): "
-        select opt in "启动服务" "停止服务" "自启动管理" "查看日志" "进入服务控制台" "退出"; do
-            case "$REPLY" in
-                1)
-                    interactive_start || true
-                    break
-                    ;;
-                2)
-                    interactive_stop || true
-                    break
-                    ;;
-                3)
-                    toggle_auto "" || true
-                    break
-                    ;;
-                4)
-                    log_service "" || true
-                    break
-                    ;;
-                5)
-                    console_service "" || true
-                    break
-                    ;;
-                6)
-                    echo "再见！"
-                    return 0
-                    ;;
-                q)
-                    echo "再见！"
-                    return 0
-                    ;;
-                *)
-                    echo "❌ 无效选择: $REPLY"
-                    echo "按任意键继续..."
-                    read -n 1 -s -r
-                    break
-                    ;;
-            esac
-        done
+        read -p "请选择操作 (1-6): " choice
+        case "$choice" in
+            1|start)
+                interactive_start || true
+                ;;
+            2|stop)
+                interactive_stop || true
+                ;;
+            3|auto)
+                toggle_auto "" || true
+                ;;
+            4|log)
+                log_service "" || true
+                ;;
+            5|console)
+                console_service "" || true
+                ;;
+            6|q|Q|quit|exit)
+                echo "再见！"
+                return 0
+                ;;
+            *)
+                echo "❌ 无效选择: $choice"
+                echo "按任意键继续..."
+                read -n 1 -s -r
+                ;;
+        esac
     done
 }
 # ---------- 主逻辑 ----------
