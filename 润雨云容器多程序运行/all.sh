@@ -380,71 +380,79 @@ stop_service() {
 }
 # ---------- 交互式启动 ----------
 interactive_start() {
-    /usr/bin/clear
-    echo
-    echo "╔══════════════════════════════════════╗"
-    echo "║            启动服务                 ║"
-    echo "╚══════════════════════════════════════╝"
-    echo
-    
-    # 构建服务列表（包含状态，固定宽度对齐）
-    local services=()
-    local display_options=("返回")
-    local svc=""
-    local max_len=0
-    
-    # 先计算最长服务名长度
-    while IFS= read -r svc; do
-        [ -z "$svc" ] && continue
-        local len=${#svc}
-        if [ "$len" -gt "$max_len" ]; then
-            max_len=$len
-        fi
-    done < <(get_service_names)
-    
-    # 再加2个空格的余量
-    max_len=$((max_len + 2))
-    
-    # 构建带对齐的显示列表
-    while IFS= read -r svc; do
-        [ -z "$svc" ] && continue
-        services+=("$svc")
-        # 用 printf 填充空格，让状态对齐
-        local padded_name=""
-        padded_name=$(printf "%-${max_len}s" "$svc")
-        if is_running "$svc"; then
-            display_options+=("${padded_name}(🟢 运行中)")
-        else
-            display_options+=("${padded_name}(🔴 已停止)")
-        fi
-    done < <(get_service_names)
-    
-    COLUMNS=1
-    PS3="请选择: "
-    select opt in "${display_options[@]}" "all - 启动所有"; do
-        if [[ "$REPLY" == "q" ]] || [[ -z "$REPLY" ]]; then
-            return 0
-        fi
+    while true; do
+        /usr/bin/clear
+        echo
+        echo "╔══════════════════════════════════════╗"
+        echo "║            启动服务                 ║"
+        echo "╠══════════════════════════════════════╣"
+        echo "║  0) 返回                             ║"
+        echo "║  9) 全部启动                         ║"
+        echo "║ ─────────────────────────────────── ║"
         
-        case "$opt" in
-            "返回")
-                break
+        # 构建服务列表（包含状态，固定宽度对齐）
+        local services=()
+        local svc=""
+        local max_len=0
+        local idx=1
+        
+        # 先计算最长服务名长度
+        while IFS= read -r svc; do
+            [ -z "$svc" ] && continue
+            local len=${#svc}
+            if [ "$len" -gt "$max_len" ]; then
+                max_len=$len
+            fi
+        done < <(get_service_names)
+        
+        # 再加2个空格的余量
+        max_len=$((max_len + 2))
+        
+        # 显示服务列表
+        while IFS= read -r svc; do
+            [ -z "$svc" ] && continue
+            services+=("$svc")
+            # 用 printf 填充空格，让状态对齐
+            local padded_name=""
+            padded_name=$(printf "%-${max_len}s" "$svc")
+            local status=""
+            if is_running "$svc"; then
+                status="(🟢 运行中)"
+            else
+                status="(🔴 已停止)"
+            fi
+            # 格式化编号和内容
+            local num_str=$(printf "%2d" "$idx")
+            echo "║  ${num_str}) ${padded_name}${status} ║"
+            idx=$((idx + 1))
+        done < <(get_service_names)
+        
+        echo "╚══════════════════════════════════════╝"
+        echo
+        read -p "请选择 (0返回, 9全部): " choice
+        
+        case "$choice" in
+            0|00|q|Q)
+                return 0
                 ;;
-            "all - 启动所有")
+            9|a|A|all)
                 start_all
-                break
-                ;;
-            "")
-                echo "❌ 无效选择"
+                sleep 1
                 ;;
             *)
-                # 提取服务名（去掉括号内的状态）
-                local name=$(echo "$opt" | sed 's/ (.*)$//' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-                if service_exists "$name"; then
-                    start_service "$name"
-                    break
+                # 检查是否是数字
+                if [[ "$choice" =~ ^[0-9]+$ ]]; then
+                    local svc_idx=$((choice - 1))
+                    if [ $svc_idx -ge 0 ] && [ $svc_idx -lt ${#services[@]} ]; then
+                        start_service "${services[$svc_idx]}"
+                sleep 1
+                    else
+                        echo "❌ 无效选择"
+                        sleep 1
+                    fi
                 else
                     echo "❌ 无效选择"
+                    sleep 1
                 fi
                 ;;
         esac
@@ -452,71 +460,79 @@ interactive_start() {
 }
 # ---------- 交互式停止 ----------
 interactive_stop() {
-    /usr/bin/clear
-    echo
-    echo "╔══════════════════════════════════════╗"
-    echo "║            停止服务                 ║"
-    echo "╚══════════════════════════════════════╝"
-    echo
-    
-    # 构建服务列表（包含状态，固定宽度对齐）
-    local services=()
-    local display_options=("返回")
-    local svc=""
-    local max_len=0
-    
-    # 先计算最长服务名长度
-    while IFS= read -r svc; do
-        [ -z "$svc" ] && continue
-        local len=${#svc}
-        if [ "$len" -gt "$max_len" ]; then
-            max_len=$len
-        fi
-    done < <(get_service_names)
-    
-    # 再加2个空格的余量
-    max_len=$((max_len + 2))
-    
-    # 构建带对齐的显示列表
-    while IFS= read -r svc; do
-        [ -z "$svc" ] && continue
-        services+=("$svc")
-        # 用 printf 填充空格，让状态对齐
-        local padded_name=""
-        padded_name=$(printf "%-${max_len}s" "$svc")
-        if is_running "$svc"; then
-            display_options+=("${padded_name}(🟢 运行中)")
-        else
-            display_options+=("${padded_name}(🔴 已停止)")
-        fi
-    done < <(get_service_names)
-    
-    COLUMNS=1
-    PS3="请选择: "
-    select opt in "${display_options[@]}" "all - 停止所有"; do
-        if [[ "$REPLY" == "q" ]] || [[ -z "$REPLY" ]]; then
-            return 0
-        fi
+    while true; do
+        /usr/bin/clear
+        echo
+        echo "╔══════════════════════════════════════╗"
+        echo "║            停止服务                 ║"
+        echo "╠══════════════════════════════════════╣"
+        echo "║  0) 返回                             ║"
+        echo "║  9) 全部停止                         ║"
+        echo "║ ─────────────────────────────────── ║"
         
-        case "$opt" in
-            "返回")
-                break
+        # 构建服务列表（包含状态，固定宽度对齐）
+        local services=()
+        local svc=""
+        local max_len=0
+        local idx=1
+        
+        # 先计算最长服务名长度
+        while IFS= read -r svc; do
+            [ -z "$svc" ] && continue
+            local len=${#svc}
+            if [ "$len" -gt "$max_len" ]; then
+                max_len=$len
+            fi
+        done < <(get_service_names)
+        
+        # 再加2个空格的余量
+        max_len=$((max_len + 2))
+        
+        # 显示服务列表
+        while IFS= read -r svc; do
+            [ -z "$svc" ] && continue
+            services+=("$svc")
+            # 用 printf 填充空格，让状态对齐
+            local padded_name=""
+            padded_name=$(printf "%-${max_len}s" "$svc")
+            local status=""
+            if is_running "$svc"; then
+                status="(🟢 运行中)"
+            else
+                status="(🔴 已停止)"
+            fi
+            # 格式化编号和内容
+            local num_str=$(printf "%2d" "$idx")
+            echo "║  ${num_str}) ${padded_name}${status} ║"
+            idx=$((idx + 1))
+        done < <(get_service_names)
+        
+        echo "╚══════════════════════════════════════╝"
+        echo
+        read -p "请选择 (0返回, 9全部): " choice
+        
+        case "$choice" in
+            0|00|q|Q)
+                return 0
                 ;;
-            "all - 停止所有")
+            9|a|A|all)
                 stop_all
-                break
-                ;;
-            "")
-                echo "❌ 无效选择"
+                sleep 1
                 ;;
             *)
-                # 提取服务名（去掉括号内的状态）
-                local name=$(echo "$opt" | sed 's/ (.*)$//' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-                if service_exists "$name"; then
-                    stop_service "$name"
-                    break
+                # 检查是否是数字
+                if [[ "$choice" =~ ^[0-9]+$ ]]; then
+                    local svc_idx=$((choice - 1))
+                    if [ $svc_idx -ge 0 ] && [ $svc_idx -lt ${#services[@]} ]; then
+                        stop_service "${services[$svc_idx]}"
+                sleep 1
+                    else
+                        echo "❌ 无效选择"
+                        sleep 1
+                    fi
                 else
                     echo "❌ 无效选择"
+                    sleep 1
                 fi
                 ;;
         esac
@@ -675,149 +691,20 @@ PYTHON_SCRIPT
     fi
     
     # 无参数时，进入交互式选择模式
-    /usr/bin/clear
-    echo
-    echo "╔══════════════════════════════════════╗"
-    echo "║          自启动管理                 ║"
-    echo "╚══════════════════════════════════════╝"
-    echo
-    
-    # 显示所有服务列表（包含状态，固定宽度对齐）
-    local services=()
-    local display_options=("返回")
-    local svc=""
-    local max_len=0
-    
-    # 先计算最长服务名长度
-    while IFS= read -r svc; do
-        [ -z "$svc" ] && continue
-        local len=${#svc}
-        if [ "$len" -gt "$max_len" ]; then
-            max_len=$len
-        fi
-    done < <(get_service_names)
-    
-    max_len=$((max_len + 2))
-    
-    # 构建带对齐的显示列表
-    while IFS= read -r svc; do
-        [ -z "$svc" ] && continue
-        services+=("$svc")
-        local padded_name=""
-        padded_name=$(printf "%-${max_len}s" "$svc")
-        if in_auto_list "$svc"; then
-            display_options+=("${padded_name}(✅ 自启动)")
-        else
-            display_options+=("${padded_name}(❌ 禁用)")
-        fi
-    done < <(get_service_names)
-    
-    COLUMNS=1
-    PS3="请选择: "
-    select opt in "${display_options[@]}"; do
-        if [[ "$REPLY" == "q" ]] || [[ -z "$REPLY" ]]; then
-            return 0
-        fi
-        
-        case "$opt" in
-            "返回")
-                break
-                ;;
-            "")
-                echo "❌ 无效选择"
-                ;;
-            *)
-                # 提取服务名（去掉括号内的状态）
-                local selected_name=$(echo "$opt" | sed 's/ (.*)$//' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-                if service_exists "$selected_name"; then
-                    toggle_auto "$selected_name"
-                    break
-                else
-                    echo "❌ 无效选择"
-                fi
-                ;;
-        esac
-    done
-}
-
-log_service() {
-    local name="$1"
-    
-    # 无参数时进入交互式选择
-    if [ -z "$name" ]; then
+    while true; do
         /usr/bin/clear
         echo
         echo "╔══════════════════════════════════════╗"
-        echo "║            查看日志                 ║"
-        echo "╚══════════════════════════════════════╝"
-        echo
+        echo "║          自启动管理                 ║"
+        echo "╠══════════════════════════════════════╣"
+        echo "║  0) 返回                             ║"
+        echo "║ ─────────────────────────────────── ║"
         
+        # 显示所有服务列表（包含状态，固定宽度对齐）
         local services=()
-        local svc=""
-        while IFS= read -r svc; do
-            [ -z "$svc" ] && continue
-            services+=("$svc")
-        done < <(get_service_names)
-        
-        COLUMNS=1
-    PS3="请选择 (1-$(( ${#services[@]} + 1 ))): "
-        select opt in "返回" "${services[@]}"; do
-            if [[ "$REPLY" == "q" ]] || [[ -z "$REPLY" ]]; then
-                return 0
-            fi
-            
-            case "$opt" in
-                "返回")
-                    break
-                    ;;
-                "")
-                    echo "❌ 无效选择"
-                    ;;
-                *)
-                    name="$opt"
-                    if service_exists "$name"; then
-                        break
-                    else
-                        echo "❌ 无效选择"
-                    fi
-                    ;;
-            esac
-        done
-        
-        [[ -z "$name" ]] && return 0
-        [[ "$name" == "返回" ]] && return 0
-    fi
-    
-    if ! service_exists "$name"; then
-        echo "❌ 无效服务：$name"
-        return 1
-    fi
-    local log_file=""
-    log_file=$(service_log_path "$name")
-    touch "$log_file"
-    /usr/bin/clear
-    echo
-    echo "╔══════════════════════════════════════╗"
-    echo "║        $name 日志                 ║"
-    echo "╚══════════════════════════════════════╝"
-    echo "[Ctrl+C 退出查看]"
-    echo
-    tail -f "$log_file"
-}
-# ---------- 进入控制台 ----------
-console_service() {
-    local name="$1"
-    if [ -z "$name" ]; then
-        /usr/bin/clear
-        echo
-        echo "╔══════════════════════════════════════╗"
-        echo "║          进入服务控制台             ║"
-        echo "╚══════════════════════════════════════╝"
-        echo
-        local services=()
-        local display_options=("返回")
         local svc=""
         local max_len=0
+        local idx=1
         
         # 先计算最长服务名长度
         while IFS= read -r svc; do
@@ -830,40 +717,256 @@ console_service() {
         
         max_len=$((max_len + 2))
         
-        # 构建带对齐的显示列表
+        # 显示服务列表
         while IFS= read -r svc; do
             [ -z "$svc" ] && continue
             services+=("$svc")
             local padded_name=""
             padded_name=$(printf "%-${max_len}s" "$svc")
-            if is_running "$svc"; then
-                display_options+=("${padded_name}(🟢 运行中)")
+            local status=""
+            if in_auto_list "$svc"; then
+                status="(✅ 自启动)"
             else
-                display_options+=("${padded_name}(🔴 已停止)")
+                status="(❌ 禁用)"
             fi
+            # 格式化编号和内容
+            local num_str=$(printf "%2d" "$idx")
+            echo "║  ${num_str}) ${padded_name}${status} ║"
+            idx=$((idx + 1))
         done < <(get_service_names)
         
-        COLUMNS=1
-        PS3="请选择: "
-        select opt in "${display_options[@]}"; do
-            if [[ "$REPLY" == "q" ]] || [[ -z "$REPLY" ]]; then
+        echo "╚══════════════════════════════════════╝"
+        echo
+        read -p "请选择 (0返回): " choice
+        
+        case "$choice" in
+            0|00|q|Q)
                 return 0
-            fi
-            case "$opt" in
-                "返回")
-                    return 0
-                    ;;
-                "")
-                    echo "❌ 无效选择"
-                    ;;
-                *)
-                    local selected_name=""
-                    selected_name=$(echo "$opt" | sed 's/ (.*)$//' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-                    if service_exists "$selected_name"; then
-                        name="$selected_name"
-                        break
+                ;;
+            *)
+                # 检查是否是数字
+                if [[ "$choice" =~ ^[0-9]+$ ]]; then
+                    local svc_idx=$((choice - 1))
+                    if [ $svc_idx -ge 0 ] && [ $svc_idx -lt ${#services[@]} ]; then
+                        toggle_auto "${services[$svc_idx]}"
+                sleep 1
                     else
                         echo "❌ 无效选择"
+                        sleep 1
+                    fi
+                else
+                    echo "❌ 无效选择"
+                    sleep 1
+                fi
+                ;;
+        esac
+    done
+}
+
+log_service() {
+    local name="$1"
+    
+    # 无参数时进入交互式选择
+    if [ -z "$name" ]; then
+        while true; do
+            /usr/bin/clear
+            echo
+            echo "╔══════════════════════════════════════╗"
+            echo "║            查看日志                 ║"
+            echo "╠══════════════════════════════════════╣"
+            echo "║  0) 返回                             ║"
+            echo "║ ─────────────────────────────────── ║"
+            
+            local services=()
+            local svc=""
+            local max_len=0
+            local idx=1
+            
+            # 先计算最长服务名长度
+            while IFS= read -r svc; do
+                [ -z "$svc" ] && continue
+                local len=${#svc}
+                if [ "$len" -gt "$max_len" ]; then
+                    max_len=$len
+                fi
+            done < <(get_service_names)
+            
+            max_len=$((max_len + 2))
+            
+            # 显示服务列表
+            while IFS= read -r svc; do
+                [ -z "$svc" ] && continue
+                services+=("$svc")
+                local padded_name=""
+                padded_name=$(printf "%-${max_len}s" "$svc")
+                local num_str=$(printf "%2d" "$idx")
+                echo "║  ${num_str}) ${padded_name} ║"
+                idx=$((idx + 1))
+            done < <(get_service_names)
+            
+            echo "╚══════════════════════════════════════╝"
+            echo
+            read -p "请选择 (0返回): " choice
+            
+            case "$choice" in
+                0|00|q|Q)
+                    return 0
+                    ;;
+                *)
+                    # 检查是否是数字
+                    if [[ "$choice" =~ ^[0-9]+$ ]]; then
+                        local svc_idx=$((choice - 1))
+                        if [ $svc_idx -ge 0 ] && [ $svc_idx -lt ${#services[@]} ]; then
+                            local selected_name="${services[$svc_idx]}"
+                            # 查看日志
+                            if service_exists "$selected_name"; then
+                                local log_file=""
+                                log_file=$(service_log_path "$selected_name")
+                                touch "$log_file"
+                                /usr/bin/clear
+                                echo
+                                echo "╔══════════════════════════════════════╗"
+                                echo "║        $selected_name 日志         ║"
+                                echo "╚══════════════════════════════════════╝"
+                                echo "[输入 0 或 exit 返回日志列表]"
+                                echo
+                                tail -n 30 -f "$log_file" &
+                                local tail_pid=$!
+                                trap 'echo; echo "请输入 0 或 exit 返回"' INT
+                                while true; do
+                                    printf "log> "
+                                    IFS= read -r cmd
+                                    case "$cmd" in
+                                        0|00|exit|quit)
+                                            break
+                                            ;;
+                                        *)
+                                            # 忽略其他输入
+                                            ;;
+                                    esac
+                                done
+                                trap - INT
+                                kill "$tail_pid" 2>/dev/null || true
+                                wait "$tail_pid" 2>/dev/null || true
+                                # 看完后回到选择菜单
+                                sleep 1
+                            fi
+                        else
+                            echo "❌ 无效选择"
+                            sleep 1
+                        fi
+                    else
+                        echo "❌ 无效选择"
+                        sleep 1
+                    fi
+                    ;;
+            esac
+        done
+    else
+        # 命令行参数模式，直接查看
+        if ! service_exists "$name"; then
+            echo "❌ 无效服务：$name"
+            return 1
+        fi
+        local log_file=""
+        log_file=$(service_log_path "$name")
+        touch "$log_file"
+        /usr/bin/clear
+        echo
+        echo "╔══════════════════════════════════════╗"
+        echo "║        $name 日志                 ║"
+        echo "╚══════════════════════════════════════╝"
+        echo "[输入 0 或 exit 退出]"
+        echo
+        tail -n 30 -f "$log_file" &
+        local tail_pid=$!
+        trap 'echo; echo "请输入 0 或 exit 退出"' INT
+        while true; do
+            printf "log> "
+            IFS= read -r cmd
+            case "$cmd" in
+                0|00|exit|quit)
+                    break
+                    ;;
+                *)
+                    # 忽略其他输入
+                    ;;
+            esac
+        done
+        trap - INT
+        kill "$tail_pid" 2>/dev/null || true
+        wait "$tail_pid" 2>/dev/null || true
+    fi
+}
+# ---------- 进入控制台 ----------
+console_service() {
+    local name="$1"
+    if [ -z "$name" ]; then
+        while true; do
+            /usr/bin/clear
+            echo
+            echo "╔══════════════════════════════════════╗"
+            echo "║          进入服务控制台             ║"
+            echo "╠══════════════════════════════════════╣"
+            echo "║  0) 返回                             ║"
+            echo "║ ─────────────────────────────────── ║"
+            
+            local services=()
+            local svc=""
+            local max_len=0
+            local idx=1
+            
+            # 先计算最长服务名长度
+            while IFS= read -r svc; do
+                [ -z "$svc" ] && continue
+                local len=${#svc}
+                if [ "$len" -gt "$max_len" ]; then
+                    max_len=$len
+                fi
+            done < <(get_service_names)
+            
+            max_len=$((max_len + 2))
+            
+            # 显示服务列表
+            while IFS= read -r svc; do
+                [ -z "$svc" ] && continue
+                services+=("$svc")
+                local padded_name=""
+                padded_name=$(printf "%-${max_len}s" "$svc")
+                local status=""
+                if is_running "$svc"; then
+                    status="(🟢 运行中)"
+                else
+                    status="(🔴 已停止)"
+                fi
+                # 格式化编号和内容
+                local num_str=$(printf "%2d" "$idx")
+                echo "║  ${num_str}) ${padded_name}${status} ║"
+                idx=$((idx + 1))
+            done < <(get_service_names)
+            
+            echo "╚══════════════════════════════════════╝"
+            echo
+            read -p "请选择 (0返回): " choice
+            
+            case "$choice" in
+                0|00|q|Q)
+                    return 0
+                    ;;
+                *)
+                    # 检查是否是数字
+                    if [[ "$choice" =~ ^[0-9]+$ ]]; then
+                        local svc_idx=$((choice - 1))
+                        if [ $svc_idx -ge 0 ] && [ $svc_idx -lt ${#services[@]} ]; then
+                            name="${services[$svc_idx]}"
+                            break
+                        else
+                            echo "❌ 无效选择"
+                            sleep 1
+                        fi
+                    else
+                        echo "❌ 无效选择"
+                        sleep 1
                     fi
                     ;;
             esac
@@ -936,9 +1039,9 @@ console_service() {
     kill "$tail_pid" 2>/dev/null || true
     wait "$tail_pid" 2>/dev/null || true
     echo
+    echo
     echo "↩ 已返回主菜单"
-    echo "按任意键继续..."
-    read -n 1 -s -r
+    sleep 1
 }
 # ---------- 显示状态 ----------
 show() {
@@ -998,7 +1101,7 @@ show_help() {
   4. log            查看日志
   5. console        进入服务控制台
   6. q              退出
-  Ctrl+C         退出日志查看
+  0 / exit       退出日志查看
   /exit          退出控制台桥接
 EOF
 }
@@ -1119,8 +1222,7 @@ interactive() {
                 ;;
             *)
                 echo "❌ 无效选择: $choice"
-                echo "按任意键继续..."
-                read -n 1 -s -r
+                sleep 1
                 ;;
         esac
     done
