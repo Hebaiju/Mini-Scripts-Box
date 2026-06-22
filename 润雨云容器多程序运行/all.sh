@@ -38,23 +38,16 @@ SELF="$0"
 # ============================================================
 
 # 服务1
+# ============================================================
+# 服务1：wddwwb 隧道（端口25561）
+# ============================================================
 SERVICE_1=(
-  'name: "zenith-bin"'               # 服务名
-  'exec_file: "ZenithProxy"'          # 可执行文件名
-  'work_dir: "ZenithProxy"'           # 工作目录（子文件夹名）
-  'exec_type: ""'              # 运行类型（留空自动识别）
-  'exec_command: ""'           # 自定义启动命令（留空自动生成）
-  'auto_start: "false"'           # 是否自启动
-)
-
-# 服务2
-SERVICE_2=(
-  'name: "zenith-jar"'               # 服务名
-  'exec_file: "ZenithProxy.jar"'          # 可执行文件名
-  'work_dir: "ZenithProxy.jar"'           # 工作目录（子文件夹名）
-  'exec_type: ""'              # 运行类型（留空自动识别）
-  'exec_command: ""'           # 自定义启动命令（留空自动生成）
-  'auto_start: "false"'           # 是否自启动
+  'name: "wddwwb-25561"'
+  'exec_file: "frpc_linux_amd64"'
+  'work_dir: "frpc1"'
+  'exec_type: "binary"'
+  'exec_command: "./frpc_linux_amd64 -f "'
+  'auto_start: "true"'
 )
 
 # ============================================================
@@ -281,14 +274,15 @@ cmdline_matches_service() {
     return 1
 }
 
-# 获取服务的所有PID
+# 获取服务的所有PID（最优方案：关键词过滤 + 环境变量验证）
 get_pid() {
     local name="$1"
-    local proc=""
+    local exec_file=$(get_service_field "$name" "exec_file")
     local pid=""
-    for proc in /proc/[0-9]*; do
-        [ -d "$proc" ] || continue
-        pid="${proc##*/}"
+    
+    # 第一步：用pgrep快速过滤出可能的进程（过滤掉99%不相关的进程）
+    for pid in $(pgrep -f "$exec_file" 2>/dev/null); do
+        # 第二步：用环境变量精确验证（只验证过滤后的少数进程）
         if cmdline_matches_service "$pid" "$name"; then
             echo "$pid"
         fi
