@@ -19,7 +19,7 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException
 # ============ 配置 ============
 CSV_FILE = "accounts_passwords.csv"
 REG_URL = "https://app.rainyun.com/auth/reg"
-BATCH_SIZE = 1  # 每次批量注册的账号数量（可修改）
+BATCH_SIZE = 10  # 每次批量注册的账号数量（可修改）
 
 # ============ 初始化日志 ============
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

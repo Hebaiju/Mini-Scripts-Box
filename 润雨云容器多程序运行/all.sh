@@ -37,17 +37,28 @@ SELF="$0"
 # 脚本会自动发现所有 SERVICE_ 开头的配置，无需手动添加到列表
 # ============================================================
 
-# 服务1
 # ============================================================
-# 服务1：wddwwb 隧道（端口25561）
+# 服务1：ZenithProxy 2b2t-liveou 主挂机代理（二进制版）
 # ============================================================
 SERVICE_1=(
-  'name: "wddwwb-25561"'
-  'exec_file: "frpc_linux_amd64"'
-  'work_dir: "frpc1"'
+  'name: "zenith-2b2t-liveou"'
+  'exec_file: "ZenithProxy"'
+  'work_dir: "2b2t-liveou"'
   'exec_type: "binary"'
-  'exec_command: "./frpc_linux_amd64 -f "'
+  'exec_command: "./ZenithProxy"'
   'auto_start: "true"'
+)
+
+# ============================================================
+# 服务2：ZenithProxy 3c3u-liveou Jar备用代理（不自启）
+# ============================================================
+SERVICE_2=(
+  'name: "zenith-3c3u-liveou"'
+  'exec_file: "ZenithProxy1.21.4.jar"'
+  'work_dir: "3c3u-liveou"'
+  'exec_type: "java"'
+  'exec_command: "java -jar ZenithProxy1.21.4.jar"'
+  'auto_start: "false"'
 )
 
 # ============================================================
@@ -1294,11 +1305,12 @@ interactive() {
         echo "║  3) auto           自启动管理         ║"
         echo "║  4) log            查看日志           ║"
         echo "║  5) console        进入服务控制台     ║"
-        echo "║  0) 退出                             ║"
+        echo "║  0) 停止所有服务并退出                ║"
+        echo "║  9) 仅退出界面（服务继续运行）        ║"
         echo "╚══════════════════════════════════════╝"
         echo
         
-        read -p "请选择操作 (1-5, 0退出): " choice
+        read -p "请选择操作 (1-5, 0停止并退出, 9仅退出): " choice
         
         # 全局stop检测
         check_stop "$choice" && return 0
@@ -1324,6 +1336,10 @@ interactive() {
                 echo "正在停止所有服务..."
                 stop_all
                 echo "再见！"
+                return 0
+                ;;
+            9)
+                echo "再见！服务继续在后台运行"
                 return 0
                 ;;
             *)
