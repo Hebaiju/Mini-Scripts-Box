@@ -1,0 +1,49 @@
+cat > cpu_load.sh << 'EOF'
+#!/bin/bash
+
+# CPU负载生成器 - 持续消耗CPU资源
+# 使用Ctrl+C或在另一个终端中执行pkill -f cpu_load.sh来停止
+
+# 计算函数 - 无限循环计算
+calc() {
+    local i=0
+    local result=0
+    echo "CPU负载进程已启动，PID: $$"
+    
+    # 无限循环计算
+    while true; do
+        # 防止整数溢出，定期重置计数器
+        if [ $i -gt 100000000 ]; then
+            i=0
+            result=0
+        fi
+        result=$((result + i))
+        i=$((i + 1))
+    done
+}
+
+# 清理函数 - 捕获中断信号
+cleanup() {
+    echo "正在停止所有CPU负载进程..."
+    pkill -P $$  # 终止所有子进程
+    exit 0
+}
+
+# 注册清理函数
+trap cleanup SIGINT SIGTERM
+
+# 启动多个进程
+echo "启动CPU负载生成器，按Ctrl+C停止..."
+echo "目标: 消耗$(nproc)个CPU核心"
+
+# 根据CPU核心数启动相应数量的进程
+for i in $(seq 1 $(nproc)); do
+    calc &
+    pids[$i]=$!  # 保存子进程PID
+    echo "已启动进程 #$i (PID: ${pids[$i]})"
+done
+
+# 等待所有子进程完成（实际上不会完成，因为是无限循环）
+wait
+EOF
+chmod +x cpu_load.sh
